@@ -1,0 +1,230 @@
+#!/usr/bin/perl
+
+# $Id$
+#####################################################################
+# Written by Sascha Lucas. Maintained by:
+#    Stefan Jakobs <projects at localside.net>
+#
+# Please send all comments, suggestions, bug reports,
+#    etc, to <projects at localside.net>.
+#####################################################################
+# Copyright (c) 2014 Stefan Jakobs
+# License GPL-3
+#####################################################################
+
+use strict;
+
+my $greeting="Welcome to the postfix queue manager (C) 2004 by Sascha Lucas\n";
+my $prompt="pqm> ";
+my $bye="Good Bye.\n";
+
+my %addr=(to=>[],from=>[]);
+my $action=();
+
+my $actions={
+	1 => {
+		text => "delete mails from: deferred",
+		args => "-d - deferred",
+		mailqfmt => ["normal"],
+	},
+	2 => {	
+		text => "delete mails from: hold",
+		args => "-d - hold",
+		mailqfmt => ["hold"],
+	},
+	d => {
+		text => "delete mails from: hold active deferred",
+		args => "-d -",
+		mailqfmt => ["normal","hold","active"],
+	},
+	3 => {
+		text => "move on hold from: deferred",
+		args => "-h - deferred",
+		mailqfmt => ["normal"],
+	},
+	h => {
+		text => "move on hold from: active deferred",
+		args => "-h -",
+		mailqfmt => ["normal","active"],
+	},
+	H => {
+		text => "relese from hold to: deferred",
+		args => "-H -",
+		mailqfmt => ["hold"],
+	},
+	4 => {
+		text => "requeue mails from: deferred",
+		args => "-r - deferred",
+		mailqfmt => ["normal"],
+	},
+	r => {
+		text => "requeue mails from: hold active deferred",
+		args => "-r -",
+		mailqfmt => ["normal","active","hold"],
+	}
+};
+
+sub do_help {
+       print "options are:
+	select        select mail(s) from your queue
+	action        chose a postsuper action
+	list	      list selections and action
+	run	      make the thing
+	clear	      clear selections and action
+	mailq	      last line from mailq command
+	help	      this help
+	quit	      quit this program
+";
+}
+
+sub do_mailq {
+	print `mailq | tail -1`;
+}
+
+sub do_clear {
+	%addr=(to=>[],from=>[]);
+	$action=();
+	print "every thing cleared\n";
+}
+
+sub do_select {
+	print 'usage: (to|from)=[user]@domain.ltd',"\n";
+	my $prompt="pqm-select> ";
+	print $prompt;
+	while (<>) {
+		
+		last	if /^(quit|qui|qu|q|)$/;
+		
+		if ( /^(to|from)=([^@]*@.+)$/ ) {
+			push @{ $addr{"$1"} }, "$2";
+		} else {
+			print "wrong syntax\n";
+		}
+		
+		print $prompt;
+	}
+}
+
+sub do_list {
+	if ( ( @{ $addr{'to'} } or @{ $addr{'from'} } ) and $action ) {
+		
+		foreach my $key ( keys %addr ) {
+			print "$key=@{ $addr{$key} }\n" if @{ $addr{$key} };
+		}
+		
+		print "action=$actions->{$action}->{'text'}\n";
+	
+	} else {
+		
+		print "Please select mails.\n"
+			if ! ( @{ $addr{'to'} } or @{ $addr{'from'} } );
+		print "You must chose an action.\n"
+			if ! $action;
+	
+	}
+
+}
+
+sub do_action {
+	
+	foreach my $keys ( sort keys %$actions ) {
+		print "		($keys) $actions->{$keys}->{'text'}\n";
+	}
+	
+	my $prompt='pqm-action> ';
+	print $prompt;
+	
+	while (<>) {
+		last	if /^(quit|qui|qu|q|)$/;
+		
+		if ( /^(.)$/ and %$actions->{$1} ) {
+			$action=$1;
+			print "OK. action=$actions->{$action}->{'text'}\n";
+			last;
+		} else {
+			print "wrong selection\n";
+		}
+		print $prompt;
+	}
+}
+
+sub do_run {
+	do_list and return 
+		if ! ( ( @{ $addr{'to'} } or @{ $addr{'from'} } ) and $action );
+	
+	my @qids = ();
+	
+	open INPUT, 'mailqfmt |' 
+		or die "Can't start mailqfmt: $!";
+	
+	while (<INPUT>) {
+	
+		next if /^--/;
+	
+		my @LINE  = split;
+		my @queue = split /=/, $LINE[1];
+		my @from  = split /=/, $LINE[4];
+		my @to	  = split /=/, $LINE[5];
+	
+		foreach my $i ( @{ %addr->{'from'} } ) {
+			push @qids, $LINE[0]
+				if	$from[1] =~ /$i/i
+				and	grep /$queue[1]/, @{ $actions->{$action}->{'mailqfmt'} }
+				;
+		}
+	
+		foreach my $i ( @{ %addr->{'to'} } ) {
+			push @qids, $LINE[0] 
+				if 	$to[1] =~ /$i/i
+				and	grep /$queue[1]/, @{ $actions->{$action}->{'mailqfmt'} }
+				;
+		}
+
+	}	
+	
+	close INPUT;
+	
+	my $cmd = "postsuper $actions->{$action}->{'args'}";
+		
+	open OUTPUT, "| $cmd" 
+		or die "Can't start postsuper: $!";
+	
+	foreach my $qid ( @qids ) {
+		print OUTPUT $qid,"\n";
+	}
+	
+	close OUTPUT;
+
+}
+
+sub do_init {
+	print $greeting;
+	print "
+	Enter help for a list of aviable options.
+	You may use abrevations like h for help.
+
+";
+
+	return 0;
+}
+
+# main
+
+do_init;
+
+print $prompt;
+
+while (<>) {
+	last 		if /^(quit|qui|qu|q)$/;
+	do_help 	if /^(help|hel|he|h)$/;
+	do_mailq 	if /^(mailq|mail|mai|ma|m)$/;
+	do_clear	if /^(clear|clea|cle|cl|c)$/;
+	do_select	if /^(select|selec|sele|sel|se|s)$/;
+	do_list		if /^(list|lis|li|l)$/;
+	do_action	if /^(action|actio|acti|act|ac|a)$/;
+	do_run		if /^(run|ru|r)$/;
+
+	print $prompt;
+}
+print $bye;
+
