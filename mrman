@@ -1,0 +1,157 @@
+#!/bin/bash
+
+#####################################################################
+# Original by Sascha Lucas 
+# Modified and  maintained by:
+#    Stefan Jakobs <projects at localside.net>
+#
+# Please send all comments, suggestions, bug reports,
+#    etc, to projects at localside.net.
+#####################################################################
+# Copyright (c) 2012-2014 Stefan Jakobs
+# License GPL-3.0
+#####################################################################
+
+
+# Mailrelay Manager by Sascha Lucas
+# improved by Stefan Jakobs (v > 0.02)
+# improved by Sebastian Heil (v > 0.03)
+VERSION="v0.04"
+
+MAILHOSTS="host1 host2 host3"
+SYNCSTATION="vmr1"
+RSYNC="/usr/bin/rsync"
+RSYNC_OPTS="-av --delete -e ssh"
+SSH="/usr/bin/ssh"
+
+# Für unterschiedliche Postfix Versionen sollte jedes
+# System selbst die *.db Dateien erzeugen:
+#RSYNC_OPTS="-av --delete --exclude=*.db -e ssh"
+#POSTMAP="/usr/local/sbin/postmap_all.sh"
+
+function ziel() {
+	local RUNNINGHOSTS=""
+	for i in $MAILHOSTS; do
+		if [ "$i" != "$HOSTNAME" ]; then
+			if [ -z "$RUNNINGHOSTS" ]; then 
+				RUNNINGHOSTS="$i"
+			else
+				RUNNINGHOSTS="$RUNNINGHOSTS $i"
+			fi
+		fi  
+	done
+	echo -n "$RUNNINGHOSTS"
+}
+
+function isSyncstation() {
+	ISSYNCSTATION=0
+	if [ $SYNCSTATION = $HOSTNAME ]; then
+		echo 1
+	else
+		echo 0
+	fi
+}
+
+function synchronisiere() {
+	if [ "$#" != "1" ]; then
+        	echo "benutze: $(basename $0) Verzeichnis/Datei"
+        	exit 1
+	fi
+
+	if [ -d $1 -o -f $1 ]; then
+        	true
+	else
+        	echo "$1 ist weder Verzeichnis noch Datei"
+        	return 1
+	fi
+	
+	local SRC=$1 
+	local DST=$1
+	if [ -d $1 ]; then
+        	local BYTES=$(echo $1 | wc -c)
+        	BYTES=$(($BYTES-1))
+        	local LAST=$(echo $1 | cut -b $BYTES)
+        	if [ "$LAST" != "/" ]; then
+                	BYTES=$(($BYTES-1))
+                	SRC=$1/
+                	echo "fuege / ans Ende vom Verzeichnis $SRC"
+        	fi
+	fi
+	
+	if [ $(isSyncstation) -eq 1 ]; then
+		if [ -n "$(ziel)" ]; then
+			for i in $(ziel); do
+				echo "Starte fuer $i:"
+				$RSYNC $RSYNC_OPTS $SRC $i:$DST
+				echo ""
+			done
+		else
+			echo "---------------------------------"
+			echo "Fehler! Keine Mailhosts gefunden."
+			echo "---------------------------------"
+		fi
+	else
+		echo "---------------------------------"
+		echo "Fehler! Nur von $SYNCSTATION ausführbar."
+		echo "---------------------------------"
+	fi
+}
+
+function mache_kommando() {
+	local kommando="$@"
+	for i in $(ziel); do
+                echo "Starte fuer $i:"
+                $SSH $i $kommando
+                echo ""
+        done
+}
+
+# main
+
+echo "Wilkommen zum mailrelay Manager (mrman) $VERSION (C) 2005 by Sascha Lucas"
+echo ""
+echo "Synchronisationsweg ist: $HOSTNAME -> $(ziel)"
+echo ""
+
+READKEY=""
+while [ "$READKEY" != "q" -a "$READKEY" != "Q" ]; do
+echo "
+1) sync /MAILRELAY-SETUP/
+	auf $MAILHOSTS
+
+2) sync /etc/mx/
+	auf $MAILHOSTS
+
+3) reload postfix
+	auf $MAILHOSTS
+
+4) sync /etc/mail/spamassassin/
+	auf $MAILHOSTS
+
+q) quit
+"
+echo -n "Was soll gemacht werden? "
+read READKEY
+case $READKEY in
+        1)	echo ""
+		synchronisiere /MAILRELAY-SETUP/
+		;;
+        2)      echo ""
+		synchronisiere /etc/mx/
+                ;;
+	3)	echo ""
+		#mache_kommando $POSTMAP
+		mache_kommando /etc/init.d/postfix reload 
+		;;
+	4)	echo ""
+		synchronisiere /etc/mail/spamassassin/
+		;;
+	q|Q)    echo ""
+		echo "Und Tschuess..."
+		echo ""
+                ;;
+        *)      echo "eh? unerwartete Eingabe!"
+		sleep 2s
+		;;
+        esac
+done
